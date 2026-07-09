@@ -12,3 +12,5 @@ Welcome to the **Expense Tracker Node Express Backend** repository. This documen
 - Propose clean and minimal changes.
 - Use `async`/`await` for asynchronous code block handling.
 - Ensure proper error handling and logging in all controllers and middleware.
+- Do NOT push code to the remote repository without explicit user permission in any scenario.
+
