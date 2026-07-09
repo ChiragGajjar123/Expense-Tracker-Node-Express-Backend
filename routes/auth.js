@@ -48,6 +48,7 @@ router.post('/register', async (req, res) => {
 
     return res.status(201).json({
       success: true,
+      token,
       user
     });
   } catch (err) {
@@ -81,6 +82,7 @@ router.post('/login', async (req, res) => {
 
     return res.json({
       success: true,
+      token,
       user
     });
   } catch (err) {
@@ -283,6 +285,7 @@ router.post('/reset-password', async (req, res) => {
     return res.json({
       success: true,
       message: 'Password has been reset successfully.',
+      token: authToken,
       user
     });
   } catch (err) {
