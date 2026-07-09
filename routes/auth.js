@@ -230,7 +230,7 @@ router.post('/forgot-password', async (req, res) => {
     } else {
       const resend = new Resend(resendApiKey);
       await resend.emails.send({
-        from: 'Expensy <onboarding@resend.dev>',
+        from: process.env.EMAIL_FROM || 'Expensy <onboarding@resend.dev>',
         to: [email],
         subject: 'Reset Password - Expensy',
         html: `
