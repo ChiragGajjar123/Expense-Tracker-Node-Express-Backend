@@ -231,7 +231,7 @@ router.post('/forgot-password', async (req, res) => {
       console.log(`[PASSWORD RESET TOKEN FOR ${email}]: ${resetLink}`);
     } else {
       const resend = new Resend(resendApiKey);
-      await resend.emails.send({
+      const { data, error } = await resend.emails.send({
         from: process.env.EMAIL_FROM || 'Expensy <onboarding@resend.dev>',
         to: [email],
         subject: 'Reset Password - Expensy',
@@ -246,8 +246,13 @@ router.post('/forgot-password', async (req, res) => {
           </div>
         `
       });
+
+      if (error) {
+        console.error('Resend API Error:', error);
+        return res.status(400).json({ success: false, message: error.message });
+      }
     }
-    return res.json({ success: true, message: 'If an account is associated with this email, a reset link has been sent.' });
+    return res.json({ success: true, message: 'Password reset link has been sent successfully to your email address.' });
   } catch (err) {
     console.error('Forgot password error:', err);
     return res.status(500).json({ success: false, message: 'Internal Server Error' });
