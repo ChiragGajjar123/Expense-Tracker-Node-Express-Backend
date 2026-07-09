@@ -18,8 +18,27 @@ const PORT = process.env.PORT || 5000;
 app.use(helmet());
 
 // CORS config
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://expense-tracker-app-react-node-expr.vercel.app',
+  process.env.CLIENT_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like postman/curl)
+    if (!origin) return callback(null, true);
+    
+    const isAllowed = allowedOrigins.some(allowed => {
+      return allowed.replace(/\/$/, '') === origin.replace(/\/$/, '');
+    });
+
+    if (isAllowed) {
+      return callback(null, true);
+    } else {
+      return callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 
