@@ -79,14 +79,27 @@ app.get('/health', (req, res) => {
 // Start server
 const startServer = async () => {
   try {
-    // MongoDB connection with optimized pool settings for high throughput
-    await mongoose.connect(process.env.MONGODB_URI, {
+    const isServerless = !!(
+      process.env.VERCEL ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.FUNCTION_NAME
+    );
+
+    const mongooseOptions = {
       serverSelectionTimeoutMS: 5000,
-      maxPoolSize: 50,          // Up from default 5 — handle many concurrent queries
-      minPoolSize: 10,          // Keep warm connections ready
-      maxIdleTimeMS: 30000,     // Close idle connections after 30s
-      socketTimeoutMS: 45000,   // Timeout slow queries
-    });
+    };
+
+    // Only apply heavy pooling options in non-serverless environments (like standalone VMs/containers)
+    // to avoid connection exhaustion and long cold start times on Vercel.
+    if (!isServerless) {
+      mongooseOptions.maxPoolSize = 50;
+      mongooseOptions.minPoolSize = 10;
+      mongooseOptions.maxIdleTimeMS = 30000;
+      mongooseOptions.socketTimeoutMS = 45000;
+    }
+
+    // MongoDB connection
+    await mongoose.connect(process.env.MONGODB_URI, mongooseOptions);
     logger.info('Successfully connected to MongoDB');
 
     // Initialize Redis connection (non-blocking — app works without it)
@@ -100,50 +113,57 @@ const startServer = async () => {
       logger.info(`Server is running on port ${PORT} (PID: ${process.pid})`);
     });
 
-    // Graceful shutdown — critical for zero-downtime deployments
-    const gracefulShutdown = async (signal) => {
-      logger.info(`${signal} received — shutting down gracefully...`);
+    // Graceful shutdown — critical for zero-downtime deployments (skipped in serverless environments)
+    if (!isServerless) {
+      const gracefulShutdown = async (signal) => {
+        logger.info(`${signal} received — shutting down gracefully...`);
 
-      // Stop accepting new connections
-      server.close(async () => {
-        logger.info('HTTP server closed');
+        // Stop accepting new connections
+        server.close(async () => {
+          logger.info('HTTP server closed');
 
-        // Close database connections
-        try {
-          await mongoose.connection.close();
-          logger.info('MongoDB connection closed');
-        } catch (err) {
-          logger.error({ err }, 'Error closing MongoDB');
-        }
+          // Close database connections
+          try {
+            await mongoose.connection.close();
+            logger.info('MongoDB connection closed');
+          } catch (err) {
+            logger.error({ err }, 'Error closing MongoDB');
+          }
 
-        // Close Redis connection
-        try {
-          await disconnectRedis();
-          logger.info('Redis connection closed');
-        } catch (err) {
-          logger.error({ err }, 'Error closing Redis');
-        }
+          // Close Redis connection
+          try {
+            await disconnectRedis();
+            logger.info('Redis connection closed');
+          } catch (err) {
+            logger.error({ err }, 'Error closing Redis');
+          }
 
-        process.exit(0);
-      });
+          process.exit(0);
+        });
 
-      // Force exit if graceful shutdown takes too long
-      setTimeout(() => {
-        logger.error('Graceful shutdown timed out — forcing exit');
-        process.exit(1);
-      }, 10000);
-    };
+        // Force exit if graceful shutdown takes too long
+        setTimeout(() => {
+          logger.error('Graceful shutdown timed out — forcing exit');
+          process.exit(1);
+        }, 10000);
+      };
 
-    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+      try {
+        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+      } catch (signalErr) {
+        logger.warn({ err: signalErr }, 'Could not register process signal listeners');
+      }
+    }
   } catch (err) {
     logger.error({ err }, 'Failed to start server');
     process.exit(1);
   }
 };
 
-// Export app for cluster.js to import
+// Export app and default for Vercel / serverless runtime compatibility
 export { app, startServer };
+export default app;
 
 // If running directly (not via cluster), start immediately
 const isDirectRun = !process.env.IS_CLUSTER_WORKER;
