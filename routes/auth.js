@@ -5,7 +5,10 @@ import { Resend } from 'resend';
 import User from '../models/User.js';
 import Transaction from '../models/Transaction.js';
 import Budget from '../models/Budget.js';
-import { protect } from '../middleware/auth.js';
+import { protect, invalidateUserCache } from '../middleware/auth.js';
+import { invalidateAllUserCaches } from '../middleware/cache.js';
+import { authRateLimit, passwordResetRateLimit } from '../middleware/rateLimiter.js';
+import { logger } from '../config/logger.js';
 
 const router = express.Router();
 
@@ -26,7 +29,7 @@ const setAuthCookie = (res, token) => {
 };
 
 // POST /api/auth/register
-router.post('/register', async (req, res) => {
+router.post('/register', authRateLimit, async (req, res) => {
   const { name, email, password } = req.body;
   try {
     if (!name || !email || !password) {
@@ -52,7 +55,7 @@ router.post('/register', async (req, res) => {
       user
     });
   } catch (err) {
-    console.error('Register error:', err);
+    logger.error({ err }, 'Register error');
     if (err.name === 'ValidationError') {
       const messages = Object.values(err.errors).map(e => e.message);
       return res.status(400).json({ success: false, message: messages.join(' ') });
@@ -62,7 +65,7 @@ router.post('/register', async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', authRateLimit, async (req, res) => {
   const { email, password } = req.body;
   try {
     if (!email || !password) {
@@ -86,7 +89,7 @@ router.post('/login', async (req, res) => {
       user
     });
   } catch (err) {
-    console.error('Login error:', err);
+    logger.error({ err }, 'Login error');
     return res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 });
@@ -121,6 +124,10 @@ router.put('/profile', protect, async (req, res) => {
 
   try {
     const user = await User.findByIdAndUpdate(req.userId, updates, { new: true, runValidators: true });
+
+    // Invalidate cached user data so subsequent requests see the update
+    await invalidateUserCache(req.userId);
+
     return res.json({ success: true, user });
   } catch (err) {
     if (err.name === 'ValidationError') {
@@ -151,11 +158,14 @@ router.put('/password', protect, async (req, res) => {
     user.password = newPassword;
     await user.save();
 
+    // Invalidate cached user data
+    await invalidateUserCache(req.userId);
+
     const token = generateToken(user._id);
     setAuthCookie(res, token);
     return res.json({ success: true, message: 'Password changed successfully.' });
   } catch (err) {
-    console.error('Change password error:', err);
+    logger.error({ err }, 'Change password error');
     return res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 });
@@ -181,6 +191,9 @@ router.post('/delete-account', protect, async (req, res) => {
       User.findByIdAndDelete(req.userId)
     ]);
 
+    // Invalidate ALL cached data for this user
+    await invalidateAllUserCaches(req.userId);
+
     const isProd = process.env.NODE_ENV === 'production';
     res.clearCookie('token', {
       httpOnly: true,
@@ -190,13 +203,13 @@ router.post('/delete-account', protect, async (req, res) => {
 
     return res.json({ success: true, message: 'Account deleted successfully.' });
   } catch (err) {
-    console.error('Delete account error:', err);
+    logger.error({ err }, 'Delete account error');
     return res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 });
 
 // POST /api/auth/forgot-password
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', passwordResetRateLimit, async (req, res) => {
   const { email } = req.body;
   try {
     if (!email) {
@@ -227,8 +240,8 @@ router.post('/forgot-password', async (req, res) => {
     const resetLink = `${clientUrl}/?resetToken=${token}`;
 
     if (!resendApiKey || resendApiKey === 're_your_api_key_here') {
-      console.warn('RESEND_API_KEY is not configured. Falling back to console logging the reset token.');
-      console.log(`[PASSWORD RESET TOKEN FOR ${email}]: ${resetLink}`);
+      logger.warn(`RESEND_API_KEY is not configured. Falling back to console logging the reset token.`);
+      logger.info(`[PASSWORD RESET TOKEN FOR ${email}]: ${resetLink}`);
     } else {
       const resend = new Resend(resendApiKey);
       const { data, error } = await resend.emails.send({
@@ -248,19 +261,19 @@ router.post('/forgot-password', async (req, res) => {
       });
 
       if (error) {
-        console.error('Resend API Error:', error);
+        logger.error({ err: error }, 'Resend API Error');
         return res.status(400).json({ success: false, message: error.message });
       }
     }
     return res.json({ success: true, message: 'Password reset link has been sent successfully to your email address.' });
   } catch (err) {
-    console.error('Forgot password error:', err);
+    logger.error({ err }, 'Forgot password error');
     return res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 });
 
 // POST /api/auth/reset-password
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', passwordResetRateLimit, async (req, res) => {
   const { token, newPassword } = req.body;
   try {
     if (!token || !newPassword) {
@@ -284,6 +297,9 @@ router.post('/reset-password', async (req, res) => {
     user.resetPasswordExpires = undefined;
     await user.save();
 
+    // Invalidate cached user data after password change
+    await invalidateUserCache(user._id.toString());
+
     const authToken = generateToken(user._id);
     setAuthCookie(res, authToken);
 
@@ -294,7 +310,7 @@ router.post('/reset-password', async (req, res) => {
       user
     });
   } catch (err) {
-    console.error('Reset password error:', err);
+    logger.error({ err }, 'Reset password error');
     return res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 });
